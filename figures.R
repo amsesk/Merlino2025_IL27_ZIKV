@@ -1,71 +1,101 @@
-# Interleukin-27 is antiviral at the maternal-fetal interface 
-# MM (2025)
+#Interleukin-27 is antiviral at the maternal-fetal interface 
+#MM (2025)
 
-# load packages----
+# %% load packages----
 library(rhdf5) #handling hdf5 file formats
 library(tidyverse)
 library(tximport) #load Kallisto results
 library(EnsDb.Hsapiens.v86)
 library(edgeR) #for DGEList object and normalization 
+library(limma)
+library(gt)
+library(DT)
+library(RColorBrewer)
+library(gplots)
+#
 
-##Import + data cleaning----
+# %% Change dir to repo and create output directories, if needed
+REPO="/path/to/this/repo"
+REPO="/home/amsesk/super1/madeline_data_upload/Merlino2025_IL27_ZIKV/"
+setwd(REPO)
+output_folders = c("figures", "tables", "rds", "data")
+purrr::map(output_folders, \(o) {
+             if (!dir.exists(o)) {
+               dir.create(o)
+             }
+})
+
+# %% Import + data cleaning----
 #read in your study design
-targets <- read_tsv("studydesign.txt")
+targets <- read_tsv("metadata/studydesign.txt")
+sampleLabels <- targets$sample
 
-#set file paths to your mapped data
-setwd("~path/to/data/kallisto_quant_TO_new_241120")
-path <- file.path(targets$mapped, "abundance.tsv") 
+# %% set file paths to your mapped data
+abunds_paths <- glue::glue("data/{targets$mapped}_abundance.tsv")
 
-#get annotations 
+# %% get annotations 
 Tx <- transcripts(EnsDb.Hsapiens.v86, columns=c("tx_id", "gene_name")) 
 Tx <- as_tibble(Tx)
 Tx <- dplyr::rename(Tx, target_id = tx_id)
 Tx <- dplyr::select(Tx, "target_id", "gene_name")
 
-#import Kallisto transcript counts
-Txi_gene <- tximport(path, 
+# %% import Kallisto transcript counts
+Txi_gene <- tximport(abunds_paths,
                      type = "kallisto", 
                      tx2gene = Tx, 
                      txOut = FALSE, #transcript level for TRUE and gene level for FALSE
                      countsFromAbundance = "lengthScaledTPM",
                      ignoreTxVersion = TRUE)
-#Filter and Normalize data
+# %% Filter and Normalize data
 myTPM <- Txi_gene$abundance
 myCounts <- Txi_gene$counts
 
-#Make a DGElist from counts and get CPM
+# %% Make a DGElist from counts and get CPM
 myDGEList <- DGEList(myCounts)
+# colnames(myDGEList) = sampleLabels
 cpm <- cpm(myDGEList) 
 
-#filer
+# %%filter
 keepers <- rowSums(cpm>1)>=3 #Keeps genes with greater than 1 CPM in at least 3 samples
 myDGEList.filtered <- myDGEList[keepers,]
 
-#normalize
+# %% normalize
 myDGEList.filtered.norm <- calcNormFactors(myDGEList.filtered, method = "TMM") 
 
 log2.cpm.filtered.norm <- cpm(myDGEList.filtered.norm, log=TRUE)
 log2.cpm.filtered.norm.df <- as_tibble(log2.cpm.filtered.norm, rownames = "geneID")
 sampleLabels <- targets$sample
 colnames(log2.cpm.filtered.norm.df) <- c("geneID", sampleLabels)
-#write_tsv(log2.cpm.filtered.norm.df,"Log2CPM_filter1CPM.txt")
+write_tsv(log2.cpm.filtered.norm.df,"tables/Log2CPM_filter1CPM.txt")
 
-##Differentially expressed genes (DEGs)----
-library(tidyverse) 
-library(limma)
-library(edgeR)
-library(gt)
-library(DT)
+saveRDS(myDGEList.filtered.norm, "rds/Merlino2025_DGEList.filtered.norm.rds")
 
-#contrast matrix----
+# %% cd to repo and make output folders
+myDGEList.filtered.norm = readRDS("rds/Merlino2025_DGEList.filtered.norm.rds")
+targets <- read_tsv("metadata/studydesign.txt")
+sampleLabels <- targets$sample
+
+# %% contrast matrix----
 condition <- factor(targets$condition, levels = c("Vehicle", "Isotype", "AntiIFNL", "AntiIL27", "IFNLam", "IL27"))
 experiment <- factor(targets$experiment, levels = c("REP3", "REP1", "REP2"))
+
+condition
+experiment
 
 design <- model.matrix(~0 + condition + experiment) #correct for batch effect
 rownames(design) <- sampleLabels
 
+design
+rownames(design) == colnames(myDGEList.filtered.norm)
+
+design
+myDGEList.filtered.norm
+sampleLabels
+colnames(myDGEList.filtered.norm) = sampleLabels
+
 v.DEGList.filtered.norm <- voom(myDGEList.filtered.norm, design, plot = FALSE) #model mean-variance relationship
-# fit a linear model to your data
+
+# %% fit a linear model to your data
 fit <- lmFit(v.DEGList.filtered.norm, design) #linear model fit
 
 
@@ -79,11 +109,7 @@ ebFit2 <- eBayes(fits2) #bayesian stats
 
 
 
-#Heatmap with Anti v Plus comparisons ----
-library(tidyverse)
-library(limma) #we only use limma in this script for the 'avearrays' function
-library(RColorBrewer)
-library(gplots)
+# %% Heatmap with Anti v Plus comparisons ----
 
 myheatcolors <- colorRampPalette(colors=c("blue","white","red"))(100)
 
@@ -92,7 +118,8 @@ colnames(v.DEGList.filtered.norm$E) <- sampleLabels
 diffGenes <- v.DEGList.filtered.norm$E[results[,1] !=0 | results[, 2] != 0 ,]
 dim(diffGenes)
 
-pdf(file = "HeatmapComparingStimsToAntis_test.pdf",   # The directory you want to save the file in
+# %%
+pdf(file = "figures/HeatmapComparingStimsToAntis_test.pdf",   # The directory you want to save the file in
     width = 6, # The width of the plot in inches
     height = 10)
 heatmap.2(diffGenes, 
@@ -107,11 +134,12 @@ heatmap.2(diffGenes,
           margins=c(6,8)) 
 dev.off()
 
+# %%
 
 diffGenes_matrix.df <- as_tibble(diffGenes, rownames = "geneID")
-write_tsv(diffGenes_matrix.df,"DEGs_StimsToAntis.txt")
+write_tsv(diffGenes_matrix.df, "tables/DEGs_StimsToAntis.txt")
 
-#Volcano Plots: Plus-Anti----
+# %% Volcano Plots: Plus-Anti----
 pIL27aIL27.df <- topTable(ebFit2, adjust ="BH", coef=1, number=40000, sort.by="logFC") %>%
   as_tibble(rownames = "geneID")
 pIFNLaIFNL.df <- topTable(ebFit2, adjust ="BH", coef=2, number=40000, sort.by="logFC") %>%
@@ -128,6 +156,7 @@ dots_pIFNLaIFNL <- pIFNLaIFNL.df %>%
   dplyr::filter(geneID %in% shared_genes) 
 highlighted_labels_pIFNLaIFNL <- dots_pIFNLaIFNL$geneID
 
+# %%
 vplot.pIL27aIL27 <- ggplot(pIL27aIL27.df) +
   aes(y=-log10(adj.P.Val), x=logFC, text = paste("Symbol:", geneID)) +
   geom_point(size=2,
@@ -151,7 +180,7 @@ vplot.pIL27aIL27 <- ggplot(pIL27aIL27.df) +
             color = "#bf0000") +
   theme(legend.position = "none")
 
-
+# %%
 vplot.pIFNLaIFNL <- ggplot(pIFNLaIFNL.df) +
   aes(y=-log10(adj.P.Val), x=logFC, text = paste("Symbol:", geneID)) +
   geom_point(size=2,
@@ -176,19 +205,20 @@ vplot.pIFNLaIFNL <- ggplot(pIFNLaIFNL.df) +
             color = "#bf0000") +
   theme(legend.position = "none")
 
-pdf(file = "IL27_volcano.pdf",   # The directory you want to save the file in
+# %%
+pdf(file = "figures/IL27_volcano.pdf",   # The directory you want to save the file in
     width = 6, # The width of the plot in inches
     height = 6)
 vplot.pIL27aIL27
 dev.off()
 
-pdf(file = "IFNL_volcano.pdf",   # The directory you want to save the file in
+pdf(file = "figures/IFNL_volcano.pdf",   # The directory you want to save the file in
     width = 6, # The width of the plot in inches
     height = 6)
 vplot.pIFNLaIFNL
 dev.off()
 
-#heatmap with more genes----
+# %% heatmap with more genes----
 library(ComplexHeatmap)
 library(RColorBrewer) 
 library(circlize)
@@ -227,7 +257,7 @@ mat <- log2.cpm.filtered.norm[match(comb, rownames(log2.cpm.filtered.norm)), ]
 rownames(mat) <- comb
 
 
-# Define colors and breaks for the heatmap
+# %% Define colors and breaks for the heatmap
 myCol <- colorRampPalette(c('white', '#bf0000'))(50)
 myBreaks <- seq(-5, 15, length.out = 50)
 
@@ -248,11 +278,11 @@ hm <- Heatmap(mat,
               row_split = gene_groups
 ) 
 
-png("hm_ifnl.png", width=6.5, height=7, unit="in", res = 800)
+png("figures/hm_ifnl.png", width=6.5, height=7, unit="in", res = 800)
 draw(hm, padding = unit(c(1, 5, 5, 1), "mm")) 
 dev.off()
 
-#GSEA----
+# %% GSEA----
 library(tidyverse)
 library(DT) #interactive and searchable tables of our GSEA results
 library(GSEABase) #functions and methods for Gene Set Enrichment Analysis
@@ -264,26 +294,23 @@ library(msigdbr) # access to msigdb collections directly within R
 # use the msigdb package to access up-to-date collections
 #msigdbr_species()
 hs_gsea <- msigdbr(species = "Homo sapiens") #gets all collections/signatures with human gene IDs
-hs_gsea %>%
-  dplyr::distinct(gs_cat, gs_subcat) %>%
-  dplyr::arrange(gs_cat, gs_subcat)
 
 hs_gsea_c2 <- msigdbr(species = "Homo sapiens", 
-                      category = "C2",
-                      subcategory = "CP:REACTOME") %>% 
+                      collection = "C2",
+                      subcollection = "CP:REACTOME") %>% 
   dplyr::select(gs_name, gene_symbol) #just get the columns corresponding to signature name and gene symbols 
 
 hs_gsea_hall <- msigdbr(species = "Homo sapiens", 
-                        category = "H") %>% 
+                        collection = "H") %>% 
   dplyr::select(gs_name, gene_symbol) #just get the columns corresponding to signature name and gene symbols 
 
 hs_gsea_gobp <- msigdbr(species = "Homo sapiens", 
-                        category = "C5",
-                        subcategory = "GO:BP") %>% 
+                        collection = "C5",
+                        subcollection = "GO:BP") %>% 
   dplyr::select(gs_name, gene_symbol) #just get the columns corresponding to signature name and gene symbols 
 
 
-#prepare data and run gsea for il27----
+# %% prepare data and run gsea for il27----
 gseadata_pIL27aIL27.df <- mutate(log2.cpm.filtered.norm.df,
                                  pIL27.AVG = (IL27_1 + IL27_2 + IL27_3)/3, 
                                  aIL27.AVG = (AntiIL27_1 + AntiIL27_2 + AntiIL27_3)/3,
@@ -303,7 +330,7 @@ gseadata_pIL27aIL27.gsea <- gseadata_pIL27aIL27.df_sub$LogFC
 names(gseadata_pIL27aIL27.gsea) <- as.character(gseadata_pIL27aIL27.df_sub$geneID)
 gseadata_pIL27aIL27.gsea <- sort(gseadata_pIL27aIL27.gsea, decreasing = TRUE)
 
-# run GSEA using the 'GSEA' function from clusterProfiler
+# %% run GSEA using the 'GSEA' function from clusterProfiler
 set.seed(123) 
 GSEA_pIL27aIL27.res <- GSEA(gseadata_pIL27aIL27.gsea, TERM2GENE=hs_gsea_gobp, verbose=FALSE)
 GSEA_pIL27aIL27.df <- as_tibble(GSEA_pIL27aIL27.res@result)
@@ -322,7 +349,7 @@ gseadata_pIFNLaIFNL_sub.df <- mutate(log2.cpm.filtered.norm.df,
   filter(LogFC >= 0.5) %>%
   mutate_if(is.numeric, round, 2)
 
-# Pull gene symbols and LogFC for the enrichment analysis
+# %% Pull gene symbols and LogFC for the enrichment analysis
 gseadata_pIFNLaIFNL.df_sub <- dplyr::select(gseadata_pIFNLaIFNL_sub.df, geneID, LogFC)
 gseadata_pIFNLaIFNL.gsea <- gseadata_pIFNLaIFNL.df_sub$LogFC
 names(gseadata_pIFNLaIFNL.gsea) <- as.character(gseadata_pIFNLaIFNL.df_sub$geneID)
@@ -333,4 +360,6 @@ set.seed(123)
 GSEA_pIFNLaIFNL.res <- GSEA(gseadata_pIFNLaIFNL.gsea, TERM2GENE=hs_gsea_gobp, verbose=FALSE)
 GSEA_pIFNLaIFNL.df <- as_tibble(GSEA_pIFNLaIFNL.res@result)
 
-write.csv(GSEA_pIFNLaIFNL.df, file = "~/output-folder/GSEA_pIFNLaIFNL_sub.csv")
+write.csv(GSEA_pIFNLaIFNL.df, file = "tables/GSEA_pIFNLaIFNL_sub.csv")
+# %%
+
