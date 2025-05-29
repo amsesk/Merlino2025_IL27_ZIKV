@@ -15,8 +15,7 @@ library(gplots)
 #
 
 # %% Change dir to repo and create output directories, if needed
-REPO="/path/to/this/repo"
-REPO="/home/amsesk/super1/madeline_data_upload/Merlino2025_IL27_ZIKV/"
+REPO="./"
 setwd(REPO)
 output_folders = c("figures", "tables", "rds", "data")
 purrr::map(output_folders, \(o) {
