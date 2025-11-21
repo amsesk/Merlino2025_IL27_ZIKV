@@ -1,5 +1,7 @@
 # Merlino2025_IL27_ZIKV
 
+[![DOI](https://zenodo.org/badge/989098542.svg)](https://doi.org/10.5281/zenodo.17672080)
+
 ## Required software
 
 R >= 4.4.2
